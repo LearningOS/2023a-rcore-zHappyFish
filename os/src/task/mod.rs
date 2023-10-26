@@ -14,9 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
+
 use lazy_static::*;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
@@ -54,6 +56,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [0; MAX_SYSCALL_NUM],
+            start_time: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -81,8 +85,10 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
-        drop(inner);
         let mut _unused = TaskContext::zero_init();
+        // record the start time of this running
+        task0.start_time = get_time_us();
+        drop(inner);
         // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
@@ -123,6 +129,10 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+            // record the start time
+            if inner.tasks[next].start_time == 0 {
+                inner.tasks[next].start_time = get_time_us();
+            }
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -134,6 +144,34 @@ impl TaskManager {
         } else {
             panic!("All applications completed!");
         }
+    }
+
+    /// Add the current 'Running' task's syscall times.
+    fn add_current_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// Get the current 'Running' task's syscall times.
+    fn get_current_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times
+    }
+
+    /// Get the current 'Running' task's task_status.
+    fn get_current_status(&self) -> TaskStatus {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status
+    }
+
+    /// Calculate total running time of current task
+    pub fn calculate_run_time(&self) -> usize{
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        get_time_us() - inner.tasks[current].start_time
     }
 }
 
@@ -168,4 +206,25 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Add the current 'Running' task's syscall times.
+pub fn add_current_syscall_times(syscall_id: usize) {
+    TASK_MANAGER.add_current_syscall_times(syscall_id);
+}
+
+/// Calculate the current 'Running' task's total running time
+pub fn calculate_run_time() -> usize {
+    let us = TASK_MANAGER.calculate_run_time();
+    ((us / 1_000_000) & 0xffff) * 1000 + (us % 1_000_000) / 1000
+}
+
+/// Get the current 'Running' task's task_status.
+pub fn get_current_status() -> TaskStatus {
+    TASK_MANAGER.get_current_status()
+}
+
+/// Get the current 'Running' task's syscall times.
+pub fn get_current_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    TASK_MANAGER.get_current_syscall_times()
 }
