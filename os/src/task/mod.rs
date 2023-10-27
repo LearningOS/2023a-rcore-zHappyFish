@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{VirtAddr, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -182,10 +183,32 @@ impl TaskManager {
     }
 
     /// Calculate total running time of current task
-    pub fn calculate_run_time(&self) -> usize{
+    fn calculate_run_time(&self) -> usize{
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
         get_time_us() - inner.tasks[current].start_time
+    }
+
+    fn mmap_current_task(&self, start: VirtAddr, end: VirtAddr, flags: usize){
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let mut map_perm = MapPermission::U;
+        if flags & 0x1 != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if flags & 0x2 != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if flags & 0x4 != 0 {
+            map_perm |= MapPermission::X;
+        }
+        inner.tasks[current].memory_set.insert_framed_area(start, end, map_perm);
+    }
+
+    fn unmap_current_task(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.delete_framed_area(start, end)
     }
 }
 
@@ -256,4 +279,14 @@ pub fn get_current_status() -> TaskStatus {
 /// Get the current 'Running' task's syscall times.
 pub fn get_current_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
     TASK_MANAGER.get_current_syscall_times()
+}
+
+/// Maps a chunk of memory for the current task
+pub fn mmap_current_task(start: VirtAddr, end: VirtAddr, flags: usize) {
+    TASK_MANAGER.mmap_current_task(start, end, flags);
+}
+
+/// Unmaps a chunk of memory for the current task
+pub fn unmmap_current_task(start: VirtAddr, end: VirtAddr) -> bool {
+    TASK_MANAGER.unmap_current_task(start, end)
 }

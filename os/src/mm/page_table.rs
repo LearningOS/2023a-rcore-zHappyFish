@@ -1,5 +1,7 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
+use crate::config::PAGE_SIZE;
+
 use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, PhysAddr};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -173,10 +175,46 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
 }
 
 /// Translate a Viraddr to PhyAddr
-pub fn translated_physaddr(token: usize, virtaddr: &VirtAddr) -> PhysAddr {
+pub fn translated_physaddr(token: usize, virtaddr: VirtAddr) -> PhysAddr {
     let page_table = PageTable::from_token(token);
     let vpn = virtaddr.floor();
     let offer = virtaddr.page_offset();
     let ppn = page_table.translate(vpn).unwrap().ppn();
     PhysAddr::splice(ppn, offer)
+}
+
+/// Check whether a segment of virtual memory is mapped
+/// no mapped: return true
+pub fn check_no_mapped(token: usize, start: usize, len: usize) -> bool{
+    let page_table = PageTable::from_token(token);
+    let num = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let mut van: VirtPageNum = (start / PAGE_SIZE).into();
+    for _ in 0..num {
+        if let Some(pte) = page_table.find_pte(van) {
+            if pte.is_valid() {
+                return false;
+            }
+        }
+        van.0 += 1;
+    }
+    true
+}
+
+/// Check whether a segment of virtual memory is all mapped
+/// all mapped: return false
+pub fn check_all_mapped(token: usize, start: usize, len: usize) -> bool{
+    let page_table = PageTable::from_token(token);
+    let num = (len + PAGE_SIZE - 1) / PAGE_SIZE;
+    let mut van: VirtPageNum = (start / PAGE_SIZE).into();
+    for _ in 0..num {
+        if let Some(pte) = page_table.find_pte(van) {
+            if !pte.is_valid() {
+                return false;
+            }
+        }else {
+            return false;
+        }
+        van.0 += 1;
+    }
+    true
 }
