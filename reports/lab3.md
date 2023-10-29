@@ -36,6 +36,7 @@ stride 算法原理非常简单，但是有一个比较大的问题。例如两�
 已知以上结论，考虑溢出的情况下，可以为 Stride 设计特别的比较器，让 BinaryHeap<Stride> 的 pop 方法能返回真正最小的 Stride。补全下列代码中的 partial_cmp 函数，假设两个 Stride 永远不会相等。
 
 ```rs
+
 use core::cmp::Ordering;
 
 const BIGSTRIDE:u64 = 255;
