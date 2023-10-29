@@ -1,13 +1,14 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
-use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, MapPermission};
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use crate::timer::get_time_us;
 
 /// Task control block structure
 ///
@@ -68,6 +69,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// start time
+    pub start_time: usize,
+
+    /// The numbers of syscall called by task
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// stride
+    pub stride: usize,
+
+    /// priority
+    pub priority: usize,
 }
 
 impl TaskControlBlockInner {
@@ -79,11 +92,48 @@ impl TaskControlBlockInner {
     pub fn get_user_token(&self) -> usize {
         self.memory_set.token()
     }
-    fn get_status(&self) -> TaskStatus {
+    pub fn get_status(&self) -> TaskStatus {
         self.task_status
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
+    }
+
+    /// Add the current 'Running' task's syscall times.
+    pub fn add_syscall_times(&mut self, syscall_id: usize) {
+        self.syscall_times[syscall_id] += 1;
+    }
+
+    /// Get the current 'Running' task's syscall times.
+    pub fn get_syscall_times(&self) -> [u32; MAX_SYSCALL_NUM] {
+        self.syscall_times
+    }
+
+    /// Calculate total running time of current task
+    pub fn calculate_run_time(&self) -> usize{
+        get_time_us() - self.start_time
+    }
+
+    pub fn mmap_task(&mut self, start: VirtAddr, end: VirtAddr, flags: usize){
+        let mut map_perm = MapPermission::U;
+        if flags & 0x1 != 0 {
+            map_perm |= MapPermission::R;
+        }
+        if flags & 0x2 != 0 {
+            map_perm |= MapPermission::W;
+        }
+        if flags & 0x4 != 0 {
+            map_perm |= MapPermission::X;
+        }
+        self.memory_set.insert_framed_area(start, end, map_perm);
+    }
+
+    pub fn unmap_task(&mut self, start: VirtAddr, end: VirtAddr) -> bool {
+        self.memory_set.remove_area_with_start_and_end_vpn(start.floor(), end.ceil())
+    }
+
+    pub fn change_priority(&mut self, priority: usize) {
+        self.priority = priority;
     }
 }
 
@@ -118,6 +168,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: 0,
+                    priority: 16,
+                    stride: 0,
                 })
             },
         };
@@ -152,6 +206,10 @@ impl TaskControlBlock {
         inner.base_size = user_sp;
         // initialize trap_cx
         let trap_cx = inner.get_trap_cx();
+        // initialize priority
+        inner.priority = 16;
+        // initialize stride
+        inner.stride = 0;
         *trap_cx = TrapContext::app_init_context(
             entry_point,
             user_sp,
@@ -191,6 +249,10 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time: 0,
+                    priority: parent_inner.priority,
+                    stride: parent_inner.stride,
                 })
             },
         });
@@ -204,6 +266,18 @@ impl TaskControlBlock {
         task_control_block
         // **** release child PCB
         // ---- release parent PCB
+    }
+
+    /// parent process spawn the child process
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        let mut parent_inner = self.inner_exclusive_access();
+        let taskcontrolblock = TaskControlBlock::new(elf_data);
+        taskcontrolblock.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+        let new_task = Arc::new(taskcontrolblock);
+        // add child
+        parent_inner.children.push(new_task.clone());
+        // return
+        new_task
     }
 
     /// get pid of process

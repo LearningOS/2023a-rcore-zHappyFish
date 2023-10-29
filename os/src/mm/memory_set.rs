@@ -61,7 +61,7 @@ impl MemorySet {
         );
     }
     /// remove a area
-    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
+    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) -> Option<VirtPageNum> {
         if let Some((idx, area)) = self
             .areas
             .iter_mut()
@@ -69,8 +69,26 @@ impl MemorySet {
             .find(|(_, area)| area.vpn_range.get_start() == start_vpn)
         {
             area.unmap(&mut self.page_table);
+            let end = area.vpn_range.get_end();
             self.areas.remove(idx);
+            Some(end)
         }
+        else {
+            None
+        }
+    }
+
+    /// remove some areas
+    pub fn remove_area_with_start_and_end_vpn(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        let mut vpn = start_vpn;
+        while vpn < end_vpn {
+            if let Some(next) = self.remove_area_with_start_vpn(vpn) {
+                vpn = next;
+            } else {
+                return false;
+            }
+        }
+        true
     }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address

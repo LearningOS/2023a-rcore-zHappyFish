@@ -142,6 +142,10 @@ impl PhysAddr {
     pub fn aligned(&self) -> bool {
         self.page_offset() == 0
     }
+    /// Get the physical address through PPN and offer
+    pub fn splice(ppn: PhysPageNum, offer: usize) -> Self{
+        Self::from(ppn.0 * PAGE_SIZE + offer)
+    }
 }
 impl From<PhysAddr> for PhysPageNum {
     fn from(v: PhysAddr) -> Self {

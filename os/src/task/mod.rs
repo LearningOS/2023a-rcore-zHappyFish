@@ -27,7 +27,8 @@ use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
-
+use crate::mm::{VirtAddr, MapPermission};
+use crate::config::MAX_SYSCALL_NUM;
 pub use context::TaskContext;
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
@@ -114,4 +115,55 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+/// Add the current 'Running' task's syscall times.
+pub fn add_current_syscall_times(syscall_id: usize) {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.add_syscall_times(syscall_id);
+}
+
+/// Calculate the current 'Running' task's total running time
+pub fn calculate_run_time() -> usize {
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    let us = inner.calculate_run_time();
+    ((us / 1_000_000) & 0xffff) * 1000 + (us % 1_000_000) / 1000
+}
+
+/// Get the current 'Running' task's task_status.
+pub fn get_current_status() -> TaskStatus {
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    inner.get_status()
+}
+
+/// Get the current 'Running' task's syscall times.
+pub fn get_current_syscall_times() -> [u32; MAX_SYSCALL_NUM] {
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    inner.get_syscall_times()
+}
+
+
+/// Maps a chunk of memory for the current task
+pub fn mmap_current_task(start: VirtAddr, end: VirtAddr, flags: usize) {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.mmap_task(start, end, flags);
+}
+
+/// Unmaps a chunk of memory for the current task
+pub fn unmmap_current_task(start: VirtAddr, end: VirtAddr) {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.unmap_task(start, end);
+}
+
+/// Change current task's priority
+pub fn change_current_priority(priority: usize) {
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.change_priority(priority);
 }
