@@ -236,6 +236,6 @@ pub fn sys_set_priority(_prio: isize) -> isize {
         -1
     }else {
         change_current_priority(_prio as usize);
-        0
+        _prio
     }
 }
